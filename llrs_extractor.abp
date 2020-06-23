@@ -1,0 +1,122 @@
+#console
+#include<RGBALib.sbp>
+
+
+Type align(1) LLRS_ROOT_HEADER
+	magic[3] AS Char
+	entry_type As DWord
+	entry_count As DWord 'LLRS_ENTRY構造体のエントリの数
+	unk2 As DWord
+	content_count As DWord '有効なファイル数（LLRS_ENTRY.entry_typeが0以外のエントリ数）
+End Type
+
+Type align(1) LLRS_DIR_HEADER
+	content_count As DWord '有効なファイル数
+	' entry_countは、LLRS_ROOT_HEADER.size÷sizeof(LLRS_ENTRY)で算出可能
+End Type
+
+Const FILENAME_SIZE = 14
+type align(1) LLRS_ENTRY
+	name[FILENAME_SIZE-1] As Byte
+	entry_type As DWord ' 0x00000001=file 0x00000002=dir, 0x00000000=invalid entry
+	offset As DWord
+	size as dword
+End Type
+
+Dim cmd AS CommandLine
+
+printf(ex"Zagadki Lwa Leona (JP:パズリング) LLRS Archive Extractor rev000 ::: Programmed by RGBA_CRT 2020\n\n")
+if cmd.GetCount() < 2 Then
+	printf(ex"usage example: llrs_extractor.exe MUSIC.RES\n")
+	end
+End if
+
+main_ext(cmd.GetCmd(1))
+'main_ext("FULL_B.RES")
+
+Sub main_ext(filename AS BytePtr)
+	Dim in As File
+	if in.openFile(filename, GENERIC_READ)=FALSE Then
+		printf("open err")
+		exitsub
+	End If
+
+	Dim header AS LLRS_ROOT_HEADER
+	in.read(VarPtr(header), sizeof(LLRS_ROOT_HEADER))
+
+	Dim file_count AS DWord
+	file_count = header.entry_count
+
+	Dim llrs_file As *LLRS_ENTRY
+	llrs_file = calloc(sizeof(LLRS_ENTRY)*file_count)
+	in.read(llrs_file, sizeof(LLRS_ENTRY)*file_count)
+
+	printf(ex"[ROOT HEADER] magic:%c%c%c%c entry_count:%d unk2:%08X content_count:%08X\n",header.magic[0],header.magic[1],header.magic[2],header.magic[3],header.entry_count,header.unk2,header.content_count)
+	Dim a as long
+
+	Dim dirname[128] As Byte
+	wsprintf(dirname, "%s_ext", in.path.GetFileName())
+	CreateDirectory(dirname, ByVal NULL)
+
+	save_llrs_files(VarPtr(in), dirname, llrs_file, file_count)
+	
+	free(llrs_file)
+End Sub
+
+Sub dir_ext(infile As *File, llrs_dir As *LLRS_ENTRY, dir_name As BytePtr)
+	' ディレクトリヘッダ（エントリ数のみ）を読みこみ
+	Dim dir_header As LLRS_DIR_HEADER
+	Dim entry_count As DWord
+	infile->setFilePtr(llrs_dir->offset)
+	infile->read(VarPtr(dir_header), sizeof(LLRS_DIR_HEADER))
+	entry_count = llrs_dir->size / sizeof(LLRS_ENTRY)
+
+	printf(ex"[DIR HEADER] dir_name:%s entry_count:%d content_count:%08X\n",dir_name ,entry_count, dir_header.content_count)
+
+	' ファイルエントリテーブルロード
+	Dim llrs_file As *LLRS_ENTRY
+	llrs_file = calloc(sizeof(LLRS_ENTRY)*entry_count)
+	infile->read(llrs_file, sizeof(LLRS_ENTRY)*entry_count)
+	
+	' ファイル保存
+	save_llrs_files(infile, dir_name, llrs_file, entry_count)
+
+	free(llrs_file)
+End Sub
+
+sub save_llrs_files(infile As *File, dir_name As BytePtr, llrs_file As *LLRS_ENTRY, file_count As DWord)
+	Dim i AS Long, fname[128] As Byte
+	for i = 0 To file_count-1
+		if llrs_file[i].entry_type =0 Then continue
+		printf(ex"[%s] #%02d file_offset:%08X file_size:%08X type:%08X ::: %s   \n",dir_name, i, llrs_file[i].offset, llrs_file[i].size, llrs_file[i].entry_type, llrs_file[i].name)
+
+		wsprintf(fname, "%s\%s", dir_name, llrs_file[i].name)
+		if llrs_file[i].entry_type = 1 Then 
+			savefile(fname, infile, VarPtr(llrs_file[i]))
+
+		Elseif llrs_file[i].entry_type = 2 Then 
+			CreateDirectory(fname, ByVal NULL)
+			dir_ext(infile, VarPtr(llrs_file[i]), fname)
+			
+			lstrcat(fname, ".header")
+			savefile(fname, infile, VarPtr(llrs_file[i]))
+
+		Else
+			printf(ex"[UNKNOWN ENTRY TYPE!]")
+			debug
+		End If
+	Next
+End Sub
+
+Sub savefile(filename As BytePtr, infile As *File, llrs_file As *LLRS_ENTRY)
+	Dim out as File, buf AS BytePtr
+
+	buf = calloc(llrs_file->size)
+	infile->setFilePtr(llrs_file->offset)
+	infile->read(buf, llrs_file->size)	
+
+	out.openFile(filename, GENERIC_WRITE)
+	out.write(buf, llrs_file->size)
+	out.close()
+	free(buf): buf=NULL
+End Sub
